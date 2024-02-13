@@ -1,0 +1,1037 @@
+---
+title: "Untitled"
+author: "Gildas"
+date: "2023-11-02"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#options(xts_check_TZ = FALSE)
+```
+
+# Import Data and Main Functions
+```{r, warning=FALSE, echo=FALSE}
+
+### Load Package
+library(readxl)
+
+
+### Importing Data 
+###...........................###
+###...........................###
+###
+file_pathA <- "/Users/gildastaliah/CAU_Kiel/MasterThesis/Data_IS.xlsx"
+sheetsA <- excel_sheets(file_pathA)
+Data_IS <- lapply(sheetsA, function(sheet) {
+  read_excel(file_pathA, sheet = sheet)
+})
+names(Data_IS) <- sheetsA
+
+
+
+###
+file_pathB <- "/Users/gildastaliah/CAU_Kiel/MasterThesis/Data_OS.xlsx"
+sheetsB <- excel_sheets(file_pathB)
+Data_OS <- lapply(sheetsB, function(sheet) {
+  read_excel(file_pathB, sheet = sheet)
+})
+names(Data_OS) <- sheetsB
+
+```
+
+
+*Functions for Shrinkage Estimators* 
+
+
+## Single_factor_model
+
+The *Covariance_SF* and *Covariance_CC* functions, were adapted from Ledoit Olivier GitHub: \url{https://github.com/oledoit/covShrinkage/blob/main/covMarket.m}. With some modifications, 
+for instance instead of using average returns as a proxy for market returns (equally weighted market), 
+we directly utilized the DAX returns. Thus, the elements of the shrinkage target $F^{SF}$, see equation 3.4. 
+
+```{r}
+
+# Copyright (c) 2014-2021, Olivier Ledoit and Michael Wolf
+# Redistribution and use was permitted under BSD 2-clause license.
+
+
+#### Covariance_CC function 
+####
+Covariance_SF <- function(R){
+  
+  
+  ## Check for NAs in the return data 
+  if (any(is.na(R))) {stop("Found NA values in the data.")} 
+  
+  ## Extract Constituents and Index returns separately 
+  R_i = R[,-1]       # Constituents returns 
+  R_0 = R[,1]        # DAX index returns
+  
+  ## Demean the data: Rs = R_t - mean(R)
+  Rs_i <- scale(R_i, scale = FALSE)
+  Rs_0 <- scale(R_0, scale = FALSE)
+  
+  ## Dimensions: T Time period, N Number of constituents 
+  T <- dim(Rs_i)[1]
+  N <- dim(Rs_i)[2]
+  
+  t <- T - 1    # Effective sample size
+  ## Compute sample covariance: eqn 3.2
+  sample <- (t(Rs_i) %*% Rs_i) / t  
+  
+ 
+  ## compute shrinkage target - F_SF: eqn 3.4
+  #
+  beta <- vector("numeric", N)
+  residuals_matrix <- matrix(NA, nrow = nrow(R_i), ncol = N) 
+  
+  for (i in 1:N) {
+    model <- lm(R_i[, i] ~ R_0)
+    beta[i] <- coef(model)[2]
+    residuals_matrix[, i] <- residuals(model)
+  }
+  
+  D <- diag(apply(residuals_matrix, 2, var))
+  varmkt = as.vector(var(R_0)) 
+  covmkt <-  as.vector((t(Rs_0) %*% Rs_i) / t)
+  F_SF <- varmkt * beta %*% t(beta) + D 
+  
+  
+  ## compute shrinkage intensity components: pihat, rhohat and gammahat
+  ##
+  ## Estimate the parameter pihat: eqn  A.2
+  Y2 <- Rs_i^2
+  sample2 <- (t(Y2) %*% Y2) / t  
+  piMat <- sample2 - sample^2
+  pihat <- sum(piMat)
+
+  ## Estimate the parameter rhohat: eqn  A.3
+  # Define rep.col function
+  rep.col <- function(x, n){matrix(rep(x, times = n), ncol = n, byrow = FALSE)}
+  
+  # Diagonal part of rho
+  rho_diag <- sum(diag(piMat))
+  # off-diagonal part of rho 
+  temp <- Rs_i * rep.col(Rs_0, N)                             
+  v1 <- (t(Y2) %*% temp) / t - rep.col(covmkt, N) * sample
+  roff1 <- sum(v1 * t(rep.col(covmkt, N))) / varmkt - sum(diag(v1) * covmkt) / varmkt
+  v3 <- (t(temp) %*% temp) / t - varmkt * sample
+  roff3 <- sum(v3 * (covmkt %*% t(covmkt))) / varmkt^2 - sum(diag(v3) * covmkt^2) / varmkt^2
+  rho_off <- 2 * roff1 - roff3
+  rhohat <- rho_diag + rho_off
+  
+  ## Estimate the parameter gammahat: eqn A.4
+  gammahat <- norm(c(sample - F_SF), type = "2")^2
+  
+  # Compute shrinkage intensity: eqn A.7
+  kappahat <- (pihat - rhohat) / gammahat
+  shrinkage <- max(0, min(1, kappahat / t))
+  
+  # Print last date, shrinkage intensity
+  last_date = as.character(index(R_i)[nrow(R_i)])
+  cat("|Last date:", last_date, " |Shrinkage value:", shrinkage, "\n")
+  
+  ## Compute shrinkage estimator: eqn 3.5
+  sigmahatSF <- shrinkage * F_SF + (1 - shrinkage) * sample
+  
+  # return list of Matrices
+  return(list(Sigma_hat = sample, F_SF = F_SF, Sigmahat_SF = sigmahatSF))
+}
+
+
+```
+
+## Common Corellation
+Moreover DAX returns always occupied the first column of the in-sample *returns_list_260* $R$, 
+was deleted inside the Covariance_CC function, since it was not needed therein. 
+
+
+```{r cars}
+
+# Copyright (c) 2014-2021, Olivier Ledoit and Michael Wolf
+# Redistribution and use was permitted under BSD 2-clause license.
+
+
+#### Covariance_CC function 
+####
+Covariance_CC <- function(R) {
+  
+  ## Check for NAs in the return data 
+  if (any(is.na(R)) ) {stop("Found NA values in the data.")} 
+  
+  ## Extract constituents returns while deleting DAX returns 
+  R <- R[,-1]       # Constituents returns 
+  
+  ## Dimensions: T Time period, N Number of constituents stocks
+  T <- dim(R)[1]
+  N <- dim(R)[2]
+  
+  ## Demean the data: R = R_it - mean(R_i)
+  R <- scale(R, scale = FALSE) 
+   
+  t <- T - 1    # effective sample size
+  # equation 3.2
+  sample <- (t(R) %*% R) / t   
+  
+  
+  ## Compute shrinkage target - F_CC: eqn 3.7
+  ##
+  samplevar <- diag(sample)
+  sqrtvar <- sqrt(samplevar)
+  rBar <- (sum(sample / outer(sqrtvar, sqrtvar)) - N) / (N * (N - 1))
+  F_CC <- rBar * outer(sqrtvar, sqrtvar)
+  diag(F_CC) <- samplevar
+  
+  ## Compute shrinkage intensity components: pihat, rhohat and gammahat
+  #
+  # Estimate the parameter pihat: eqn A.2
+  R2 <- R^2
+  sample2 <- (t(R2) %*% R2) / t   
+  piMat <- sample2 - sample^2
+  pihat <- sum(piMat)
+  
+  # Estimate the parameter rhohat: eqn A.5
+  # Define rep.row function 
+  rep.row <- function(x, n) {matrix(rep(x, each = n), nrow = n)}
+  
+  # Diagonal part of the parameter that we call rho 
+  rho_diag <- sum(diag(piMat))
+  
+  # off-diagonal part of the parameter that we call rho 
+  term1 <- (t(R^3) %*% R) / t
+  term2 <- rep.row(samplevar, N) * sample
+  term2 <- t(term2)
+  thetaMat <- term1 - term2
+  diag(thetaMat) <- 0
+  rho_off <- rBar * sum(outer(1/sqrtvar, sqrtvar) * thetaMat)
+  rhohat <- rho_diag + rho_off
+  
+  # Estimate the parameter gammahat: eqn A.6
+  gammahat <- norm(c(sample - F_CC), type = "2")^2
+  
+  # Compute shrinkage intensity: eqn A.7
+  kappahat <- (pihat - rhohat) / gammahat
+  shrinkage <- max(0, min(1, kappahat / t))
+  
+  # Print last date, shrinkage intensity
+  last_date = as.character(index(R)[nrow(R)])
+  cat("|Last date:", last_date, " |Shrinkage value:", shrinkage, "\n")
+  
+  ## Compute shrinkage estimator: eqn 3.8
+  sigmahatCC <- shrinkage * F_CC + (1 - shrinkage) * sample
+  
+  # return list of Matrices
+  return(list( F_CC = F_CC, Sigmahat_CC = sigmahatCC))
+}
+
+```
+
+
+## Optimization Analytical soultion - GMVP
+The optimalX function computes the GMVP weights, corresponding to the specifications in equation 3.11.
+
+```{r}
+
+
+#### optimalX function 
+####
+optimalX <- function(covMat){
+  # Ensure matrix is NxN
+  if (nrow(covMat) != ncol(covMat)) {
+    stop("The covariance matrix is not square (NxN).")
+  }
+  # GMVP Analytical solution: eqn 3.11
+  ones <- matrix(1, nrow  =  dim(covMat)[1])
+  invCov <-  solve(covMat)
+  optimX <-  (invCov %*% ones)/as.vector((t(ones) %*% invCov %*% ones))
+  
+  names(optimX) <- names(covMat)
+  return(optimX)
+}
+
+```
+
+
+## Function to compute Simple Returns
+To be used to compute, both in out-sample simple returns equation 3.12
+
+```{r, warning=FALSE}
+
+#### Load packages
+library(PerformanceAnalytics)
+library(xts)
+
+#### compute_returns function 
+#### 
+compute_returns <- function(data) {
+  # Ensure data is xts: Extenible Time Series
+  if (!is.xts(data)) { 
+    data_xts <- as.xts(data)
+  }
+  # Calculate simple returns: eqn 3.12 
+  # Delete first row, NA values. 
+  returns_xts <- Return.calculate(data_xts, method="discrete")[-1]
+  return(returns_xts)
+}
+
+```
+
+## Column Binding function
+
+```{r}
+#### nestedlist_to_column function 
+####
+nestedlist_to_column <- function(inner_list) {
+  # Column bind list
+  combined <- do.call(cbind, inner_list)
+  
+  # Convert to a data frame
+  df <- as.data.frame(combined)
+  names(df) <-  names(inner_list)
+  return(df)
+}
+
+```
+
+## Covariance and Weights Calculation
+returns_list_260 are the list of returns, where each pair of returns is made up 
+of 261 or 260 in-sample observations, last five years of weekly returns data. 
+
+```{r, warning=FALSE}
+
+##...................##
+##...................##
+#### Computes in-sample returns: Data_IS
+## Function used: "compute_returns..."
+returns_list_260 <- lapply(Data_IS, compute_returns)
+
+##...................##
+##...................##
+#### Compute Covariance Matrices
+## Functions used: "Covariance_SF" and  "Covariance_CC" 
+print("Shrinkgae values, 260_SF")
+CovMatx_260_SF <- lapply(returns_list_260, Covariance_SF)
+print("Shrinkgae values, 260_SF")
+CovMatx_260_CC <- lapply(returns_list_260, Covariance_CC)
+
+##...................##
+##...................##
+#### Compute Optimal weights
+## Function used: "optimalX"
+Weights_260_SF <- ( lapply( CovMatx_260_SF, function(sublist)
+  {lapply(sublist, optimalX)}))
+Weights_260_CC <- ( lapply( CovMatx_260_CC, function(sublist) 
+  {lapply(sublist, optimalX)}))
+
+
+## Column bind each list in the nested list
+## Function used: "nestedlist_to_column"
+df_Weights_260_SF <- lapply( Weights_260_SF , nestedlist_to_column) 
+df_Weights_260_CC <- lapply( Weights_260_CC , nestedlist_to_column)
+
+
+## Ensure weights sum to unity
+one_Wgt_260_SF <- do.call(rbind, lapply(df_Weights_260_SF , colSums))
+one_Wgt_260_CC <- do.call(rbind, lapply(df_Weights_260_CC , colSums))
+one_260 <- cbind(one_Wgt_260_SF, one_Wgt_260_CC ); one_260 
+
+```
+
+
+## Combining GMVP weights 
+
+The Covariance_SF function yielded 3 covariances, while the Covariance_CC 
+function produced two. In the subsequent sections, we will consolidate/combine 
+the weights across the 40 periods.
+
+```{r, warning=FALSE}
+
+#### combine_matrices function 
+####
+combine_matrices <- function( weights_SF, weights_CC) {
+  
+  # Ensure row names of both matrices match
+  if (!identical(rownames(weights_SF), rownames(weights_CC))) {
+    stop(sprintf("Row names for matrices at index %d do not match!", i))
+  }
+  # Combine matrices
+  combined_matrix <-  as.matrix( cbind(weights_SF, weights_CC))
+  return(combined_matrix)
+}
+
+
+#### Combine Optimal weights
+## Function used: "combine_matrices"
+## T = 260
+weights_SF <- df_Weights_260_SF; weights_CC <- df_Weights_260_CC
+all_weights_260 <- lapply(1:length(weights_SF), 
+              function(i) combine_matrices(weights_SF[[i]], weights_CC[[i]] ))
+
+```
+
+
+# Out-of-Sample Portfolio Returns 
+The *portfolio_returns* below function below was  scripted to compute out-sample 
+portfolio returns using returns_data (TxN) and all_weights_260 (Nx5).
+
+```{r}
+
+#### portfolio_returns function 
+####
+portfolio_returns <- function(returns_data, weights_matrix) {
+  
+  # Ensure column names of returns_data match row names of weights_matrix
+  if (!identical(colnames(returns_data), rownames(weights_matrix))) {
+    cat("Start date of return_data:", as.character( index(returns_data)[1]), "\n")
+    stop("Error: Mismatched col names  with row names of weights_matrix.")
+  }
+  
+  # Create an empty list to store results for each GMVP
+  results_list <- vector("list", length = ncol(weights_matrix))
+  
+  # Loop through weight_matrix columns and "compute portfolio returns": eqn 3.13
+  for (i in 1:ncol(weights_matrix)) {
+    results_list[[i]] <- as.numeric (returns_data %*% as.matrix(weights_matrix[,i]))
+  }
+  # Combine results into a matrix
+  portfolio_returns <- do.call(cbind, results_list)
+  colnames(portfolio_returns) <- colnames(weights_matrix)
+  
+  # Convert result to an xts object
+  portfolio_returns <- xts(portfolio_returns, order.by = index(returns_data))
+  
+  return(portfolio_returns)
+} 
+
+
+
+
+##### Out-of-Sample Returns
+##### T = 260
+##...................##
+##...................##
+#### Computes out of sample returns: Data_OS
+## Function used: "compute returns"
+returns_data <- lapply( Data_OS, compute_returns)
+
+#### Compute respective out-of-sampke portfolio returns
+## Function used: "portfolio_returns"
+## T = 260
+all_returns_260 <- lapply(1:length(returns_data), function(i) {
+    portfolio_returns(returns_data[[i]], all_weights_260 [[i]])
+})
+
+## Row bind results and form a single data frame, and rename columns
+port_returns_260 <- do.call(rbind, all_returns_260); names(port_returns_260)
+colnames(port_returns_260) <- c( "Sample", "SF Model", "Shrink-SF", "CC Model", "Shrink-CC")
+
+```
+# Tables and Graphs
+
+Performance Characteristics
+
+Annualizing returns is straightforward for log returns but complicated for simple 
+returns, often leading to errors. Based on this insight, the log returns were used 
+in the comparison stage of the different strategies.  Dorfleiter (2001, p.5)
+```{r, warning=FALSE}
+library(moments)
+
+
+performance_metrics <- function(returns, risk_free_rate = 0) { # Weekly risk-free rate
+  
+  # Annualized Return
+  annualized_return <-  ( mean(returns) * 52 ) * 100
+  
+  # Annualized Standard Deviation
+  annualized_stddev <- ( sd(returns) * sqrt(52)) * 100
+  
+  # Annualized Sharpe Ratio
+  annualized_sharpe <- (annualized_return - risk_free_rate*52) / annualized_stddev
+  
+  # Skewness
+  skewness_value <- skewness(returns)
+  
+  # Kurtosis
+  kurtosis_value <- kurtosis(returns)
+  
+  metrics <- list(
+    Annualized_Return = annualized_return,
+    Annualized_StdDev = annualized_stddev,
+    Annualized_Sharpe = annualized_sharpe,
+    Skewness = skewness_value,
+    Kurtosis = kurtosis_value)
+}
+
+## Table 1 contents 
+# Transform to log returns
+# Compute metrics on each column (GMVP strategy)
+log.port_returns_260 <- log (1 + port_returns_260)
+do.call(rbind,  apply(port_returns_260, 2, performance_metrics) )
+nrow(log.port_returns_260) # Number of out-sample returns 
+
+```
+
+*Rolling Annualized Standard deviation*
+Below we compute the  Rolling Annualized Standard deviation for each GMVP strategy and plot. 
+```{r, warning=FALSE}
+
+## Load packages 
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(tidyverse)
+
+# 52 weekly returns
+n <- 52  
+Ann.StdDev <- function(data, n = 52){ (sd(data) * sqrt(n)) * 100 }
+
+
+rolling_std_dev <- rollapply(log.port_returns_260 , width = n, FUN = Ann.StdDev, 
+                             by.column = TRUE, align = "right")
+
+rolling_std_dev_long <- as.data.frame(rolling_std_dev) %>%
+  rownames_to_column(var = "Date") %>%
+  mutate(Date = as.Date(Date)) %>%
+  pivot_longer(cols = -Date, names_to = "GMVP", values_to = "Ann.StdDev")
+
+
+# Define specific colors for each GMVP strategy
+color_mapping <- c("red", "black", "brown", "green", "blue")
+
+
+## Figure 2
+ggplot(rolling_std_dev_long, aes(x = Date, y = Ann.StdDev, color = GMVP)) +
+  geom_line(linewidth = 1) +  
+  labs(title = "Realized out-of-sample rolling standard deviation", y = "Annualized Standard Deviation", x = "Year") +
+  theme_minimal() +  
+  theme(axis.ticks.length = unit(0.25, "cm"),
+        panel.background = element_rect(fill = "gray95"),
+        plot.background = element_rect(fill = "gray92"),
+        legend.position = "top", 
+        legend.justification = "left",
+        legend.direction = "horizontal",
+        legend.key.size = unit(0.4, "lines"),
+        legend.text = element_text(size = 12)) +
+  scale_color_manual(values = color_mapping)  
+color_mapping <- c("red", "black", "brown", "green", "blue")
+
+
+```
+
+
+*Downside characteristics*
+```{r, warning=FALSE}
+
+downside_metrics <- function(returns, alpha = 0.05) {
+  # Max Drawdown
+  cumulative_returns <- cumprod(1 + returns)
+  running_max <- cummax(cumulative_returns)
+  drawdowns <- (cumulative_returns - running_max) / running_max
+  max_drawdown <- - ( min(drawdowns) * 100)
+  
+  # Semi-Standard Deviation
+  down_std_dev <- DownsideDeviation(returns) 
+  down_std_dev <- ( as.vector(down_std_dev) * sqrt(52)) * 100
+  
+  # Value at Risk (VaR)
+  var <- -quantile(returns, probs = alpha) 
+  VaR <- var * 100
+  
+  # Average Value at Risk (AVaR)
+  avar_returns <- returns[returns <= -var]
+  AVar <- -mean(avar_returns) * 100
+  
+  metrics <- list( 
+    Max_Drawdown = max_drawdown,
+    down_StanDev = down_std_dev ,
+     VaR  = VaR,
+     AVaR  = AVar )
+}
+
+## Table 2 contents
+# Downside risk metrics
+do.call(rbind, apply(log.port_returns_260, 2, downside_metrics))
+
+```
+
+*GMVP weights distribution*
+Here we obtain the weights and compute their descriptive statistics 
+```{r}
+
+
+DF_Weights_260 <-  do.call( rbind, all_weights_260)
+colnames( DF_Weights_260 ) <- c( "Sample", "SF Model", "Shrink-SF", "CC Model", "Shrink-CC")
+
+
+DF_weights_long <- as.data.frame( DF_Weights_260) %>%
+  tidyr::pivot_longer(cols = everything(), names_to = "GMVP", values_to = "Weights")
+
+## Figure 4
+# Create boxplot
+ggplot(DF_weights_long, aes(x = GMVP, y = Weights)) +
+  geom_boxplot() +
+  labs(title = "Boxplot for GMVP weights", y = "Weights", x = "GMVP") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.ticks.length = unit(0.25, "cm"),
+        panel.background = element_rect(fill = "gray95"),
+        plot.background = element_rect(fill = "gray92"))
+
+
+
+
+```
+```{r}
+
+# This section relates to reults presented on page 21
+# Obtain asset name with minimum and maximum weights 
+min <- which(DF_Weights_260 == min(DF_Weights_260), arr.ind = TRUE)
+max <- which(DF_Weights_260 == max(DF_Weights_260), arr.ind = TRUE)
+min; max
+
+# Obtain the rebalance period were min, max weight occurred
+# recall the periods range from 1....40
+min <- which(  do.call(rbind, lapply(all_weights_260, min ))  == 
+                        min(do.call(rbind, lapply(all_weights_260, min) ) )) #1
+max <- which(  do.call(rbind, lapply(all_weights_260, max ))  == 
+                    max(do.call(rbind, lapply(all_weights_260, max ) ) )) #26
+min; max
+
+# ''' Now we have the names of the assets with thee min and max weight, they are 
+# are all under column one - sample covariance '''  
+
+# Obtain in-sample returns data for the period where min weight and max weight 
+# occurred, for volatility comparison  with other assets during that period 
+min <- returns_list_260[[1]] 
+max <- returns_list_260[[26]] 
+
+# min volatility 
+apply(t( do.call(cbind, apply(min, 2, table.AnnualizedReturns, 52 )) ) ,  2 , summary)
+table.AnnualizedReturns( min$`MERCEDES-BENZ GROUP N - TOT RETURN IND` , 52)
+# it recorded one of the highest volatility at 44%, which is greater than the volatility of 75% of the asset. 
+
+
+# max volatility 
+apply(t( do.call(cbind, apply(max, 2, table.AnnualizedReturns, 52 )) ) ,2, summary)
+table.AnnualizedReturns(max$`MUENCHENER RUCK. - TOT RETURN IND` , 52)
+# It recorded the lowest volatility at  16.81%, with highest been 38.99%. 
+
+
+```
+
+
+
+*Wealth Growth*
+
+below we compute the  cumulative simple returns, the growth rate, and 
+the terminal wealth with initial investment of 100 euro.   
+```{r, warning=FALSE}
+
+
+wealth_growth_260 <- 100 * cumprod(1 + port_returns_260)
+
+
+# Convert xts object to a long data frame
+wealth_growth_260_long <- as.data.frame(wealth_growth_260) %>%
+  rownames_to_column(var = "Date") %>%
+  mutate(Date = as.Date(Date)) %>% 
+  pivot_longer(cols = -Date, names_to = "GMVP", values_to = "Values")
+
+
+color_mapping <- c("red", "black", "brown", "green", "blue")
+ggplot(wealth_growth_260_long, aes(x = Date, y = Values, color = GMVP)) +
+  geom_line(linewidth = 1) +  
+  labs(title = "Wealth growth across the decade", y = "Value of investment (€)", x = "Year") +
+  theme_minimal() +  # Use theme_minimal for a modern look
+  theme(axis.ticks.length = unit(0.25, "cm"),
+        panel.background = element_rect(fill = "gray95"),
+        plot.background = element_rect(fill = "gray92"),
+        legend.position = "top", 
+        legend.justification = "left",
+        legend.direction = "horizontal",
+        legend.key.size = unit(0.5, "lines"),
+        legend.text = element_text(size = 12)) + 
+  scale_color_manual(values = color_mapping)  
+      
+ 
+## Terminal welath
+tail(wealth_growth_260, 1)
+
+## Growth rate: computed from simple returns
+growth_rate  <- function(returns) {
+  ((prod(1 + returns))^(52/length(returns)) - 1)
+}
+apply(port_returns_260, 2,  growth_rate) * 100
+
+```
+
+
+# Test DMW 
+Below we carry out the DMW test as described under section 3.4
+```{r}
+
+# Load required libraries
+library(sandwich)
+library(lmtest)
+
+
+DMW_test_newey <- function(rtA, rtB) {
+  
+  # Compute  dt: eqn 3.14
+  dt =  rtA^2 - rtB^2
+  
+  # Compute mean of dt 
+  mean_dt = mean(dt)
+  
+  # Number of observations
+  T = NROW(dt)
+  
+  # Set lag to T^(1/3)
+  # In line with A.J. Patton and K. Sheppard (2009). p.824
+  lag = floor(T^(1/3))
+  
+  # Estimate the Newey-West standard error
+  nw_var = NeweyWest(lm(dt ~ 1), lag = lag, prewhite = FALSE)
+  nw_se = sqrt(diag(nw_var))
+  
+  # Compute the DMW test statistic using Newey-West standard error: eqn 3.16
+  # 
+  DMW_T = sqrt(T) * mean_dt / nw_se 
+  
+  ## H0:  E[d] = 0
+  if (DMW_T < 0) {
+    # Calculate one-sided p-value for H1: E[d] < 0
+    p_value <- pnorm(DMW_T)
+    # Decision based on 0.01 significance level
+    decision <- ifelse(p_value < 0.01, "Reject H0 in favor of H1", "Fail to reject H0")
+    return(list( DMW_T = DMW_T, p_value = p_value, nw_se = nw_se,  decision = decision))
+  } else {
+    # Calculate one-sided p-value for H2: E[d] > 0
+    p_value <- 1 - pnorm(DMW_T)
+    # Decision based on 0.01 significance level
+    decision <- ifelse(p_value < 0.01, "Reject H0 in favor of H2", "Fail to reject H0")
+    return(list( DMW_T = DMW_T, p_value = p_value, nw_se = nw_se, decision = decision))
+  }
+}
+
+
+## Table 3 contents
+do.call(rbind, DMW_test_newey( log.port_returns_260$Sample , log.port_returns_260$`SF Model` ))
+do.call(rbind, DMW_test_newey( log.port_returns_260$Sample , log.port_returns_260$`Shrink-SF` ))
+do.call(rbind, DMW_test_newey( log.port_returns_260$Sample , log.port_returns_260$`CC Model`))
+do.call(rbind, DMW_test_newey( log.port_returns_260$Sample , log.port_returns_260$`Shrink-CC`))
+
+
+```
+
+
+# Examine the impact of size T observations 
+Here we examine the impact of size T ( where T = 155 , T = 80 ) observations, on the 
+out-sample sample performance, The five estimators are estimated using T weekly
+returns, with T being equal to 155 and 80, (and 260 already computed). 
+
+```{r}
+
+
+### Function to compute returns 
+### last T=155 weekly (circa 3 years) data will be extracted
+compute_returns_155 <- function(data) {
+  
+  # Ensure data is xts: Extenible Time Series
+  if (!is.xts(data)) { 
+    data_xts <- as.xts(data)
+  }
+  # Calculate simple returns 
+  returns_xts <-Return.calculate(data_xts , method="discrete")[-1]
+  # Extract the latest 155 returns
+  latest_155 <-  tail(returns_xts, 155)
+  names(latest_155) <- names (data_xts)
+  
+  return(latest_155)
+}
+
+
+
+### Function to compute returns 
+### last T=80 weekly (circa 1.5 years) data will be obtained
+compute_returns_80 <- function(data) {
+  
+  # Ensure data is xts: Extenible Time Series
+  if (!is.xts(data)) { 
+    data_xts <- as.xts(data)
+  }
+  # Calculate simple returns 
+  returns_xts <-Return.calculate(data_xts , method="discrete")[-1]
+  # Extract the latest 155 returns
+  latest_80 <- tail(returns_xts, 80)
+  names(latest_80) <- names(data_xts)
+  
+  return(latest_80)
+}
+
+```
+
+
+
+```{r}
+##.....................##
+#### Computes in-sample returns: Data_IS
+## Function used: "compute_returns..."
+returns_list_155 <- lapply(Data_IS, compute_returns_155 )
+returns_list_80 <-  lapply(Data_IS, compute_returns_80 )
+
+##.....................##
+#### Compute Covariance Matrices
+## Functions used: "Covariance_SF" and  "Covariance_CC" 
+print("Shrinkage values, 155_SF")
+CovMatx_155_SF <- lapply(returns_list_155, Covariance_SF)
+print("Shrinkage values, 155_SF")
+CovMatx_155_CC <-  lapply(returns_list_155 , Covariance_CC)
+
+print("Shrinkage values, 80_SF")
+CovMatx_80_SF <- lapply(returns_list_80, Covariance_SF)
+print("Shrinkage values, 80_CC")
+CovMatx_80_CC <- lapply(returns_list_80, Covariance_CC)
+
+##....................##
+#### Compute Optimal weights
+## Function used: "optimalW"
+Weights_155_SF <- ( lapply( CovMatx_155_SF, function(sublist) 
+  {lapply(sublist, optimalX)}))
+Weights_155_CC <- ( lapply( CovMatx_155_CC, function(sublist) 
+  {lapply(sublist, optimalX)}))
+
+Weights_80_SF <- ( lapply( CovMatx_80_SF, function(sublist) 
+  {lapply(sublist, optimalX)}))
+Weights_80_CC <- ( lapply( CovMatx_80_CC, function(sublist) 
+  {lapply(sublist, optimalX)}))
+
+### Column bind each list in the nested list
+df_Weights_155_SF <- lapply( Weights_155_SF, nestedlist_to_column)
+df_Weights_155_CC <- lapply( Weights_155_CC, nestedlist_to_column)
+
+df_Weights_80_SF <- lapply( Weights_80_SF, nestedlist_to_column)
+df_Weights_80_CC <- lapply( Weights_80_CC, nestedlist_to_column)
+
+```
+
+
+Out of sample portfolio returns for T=155, T=80
+```{r, warning=TRUE}
+
+## Combine optimal weighst and compute out-sample portfolio returns
+## T = 155
+weights_SF <- df_Weights_155_SF; weights_CC <- df_Weights_155_CC
+all_weights_155 <- lapply(1:length(weights_SF), function(i) 
+  combine_matrices(weights_SF[[i]], weights_CC[[i]] ))
+## T = 155
+all_returns_155 <- lapply(1:length(returns_data), function(i) {
+    portfolio_returns(returns_data[[i]], all_weights_155  [[i]])
+})
+
+
+```
+
+
+
+
+```{r, warning=FALSE}
+
+## T = 80
+weights_SF <- df_Weights_80_SF; weights_CC <- df_Weights_80_CC
+all_weights_80 <- lapply(1:length(weights_SF), function(i) 
+  combine_matrices(weights_SF[[i]], weights_CC[[i]] ))
+## T = 80
+all_returns_80 <- lapply(1:length(returns_data), function(i) {
+    portfolio_returns(returns_data[[i]], all_weights_80  [[i]])
+})
+
+
+## Row bind results and form a single data frame
+port_returns_155 <-  do.call(rbind, all_returns_155 )
+names( port_returns_155)  <-  c( "Sample_155", "SF Model_155", 
+                              "Shrink-SF_155", "CC Model_155", "Shrink-CC_155")
+
+##
+port_returns_80 <- do.call(rbind, all_returns_80)
+names( port_returns_80)  <-  c( "Sample_80", "SF Model_80", "Shrink-SF_80", 
+                                                 "CC Model_80", "Shrink-CC_80")
+####
+####
+## Compute terminal wealth with 100 initial investment 
+port_returns_all <- merge(port_returns_260, port_returns_155, port_returns_80  )
+term_wealth <- cbind(tail( 100 * cumprod(1 + port_returns_all ), 1 )); term_wealth
+# Blue tick
+
+```
+
+
+
+```{r}
+
+log.port_returns_all <- log( 1 + port_returns_all)
+summary(log.port_returns_all ); nrow(log.port_returns_all)
+
+
+## Terminal wealth, Ann.StdDev, Jarque and Ljung, VaR 
+
+####  Ann.StdDev
+do.call(rbind , list(apply( log.port_returns_all, 2, Ann.StdDev) ) )
+
+#### Jargur Berra test of normality 
+## H0: normally distributed returns
+## H1: not normally distributed returns
+do.call(rbind, apply(log.port_returns_all ,2, jarque.test))
+
+#### Ljung test of independence. 
+## Ho: serial correlation
+## H1: No serial correlation 
+# A truncated lag number was used was used
+lag <- round( (NROW(log.port_returns_260) ^(1/3))) # 8
+do.call(rbind, apply(log.port_returns_all , 2, Box.test, lag = lag, type = 'Ljung')) 
+
+## Downside metrics
+- do.call( rbind, list(apply( log.port_returns_all, 2, quantile, probs = 0.05)))  *  100
+# Blue tick
+
+
+```
+
+## Covid Period Analysis
+
+Below we examine the downside characteristics during the covid-19 period. 
+According to [Statista](https://www.statista.com/statistics/1100823/coronavirus-cases-development-germany/), 
+COVID-19 began in Germany March 2020.
+
+
+
+```{r}
+
+# 3 months before the covid, and 2 years from that time. 
+# Subset from December 2019 to November 2021
+port_returns_all <- merge(port_returns_260, port_returns_155, port_returns_80  )
+port_returns_all <- log.port_returns_all
+port_returns_all_covid <- port_returns_all ['2019-12/2021-11']
+
+## Downside metrics and Annualized Standard deviation
+do.call(rbind, apply(port_returns_all_covid, 2, downside_metrics ))
+#downside_metrics <- function(returns, alpha = 0.05) {function}
+
+do.call(rbind, apply(port_returns_all_covid, 2, function(x) downside_metrics(x, alpha = 0.01)))
+
+# Annulized StdDev
+do.call(cbind, list( apply(port_returns_all_covid, 2, Ann.StdDev ))) 
+
+```
+
+Descriptive stats for weights $\textbf{x}$
+```{r}
+# Table of Weights summary
+
+DF_Weights_260 <-  do.call( rbind, all_weights_260)
+DF_Weights_155 <-  do.call( rbind, all_weights_155)
+DF_Weights_80 <-  do.call( rbind, all_weights_80)
+
+
+colnames(DF_Weights_260) <- c( "Sample", "SF Model", "Shrink-SF", "CC Model", "Shrink-CC")
+
+apply( DF_Weights_260 , 2 , summary)
+apply( DF_Weights_260 , 2 , mean)
+colnames(DF_Weights_155) <- c( "Sample_155", "SF Model_155", "Shrink-SF_155", 
+                               "CC Model_155", "Shrink-CC_155")
+apply( DF_Weights_155 , 2 , summary)
+apply( DF_Weights_155 , 2 , mean)
+colnames(DF_Weights_80) <- c( "Sample_80", "SF Model_80", "Shrink-SF_80", 
+                              "CC Model_80", "Shrink-CC_80")
+
+apply( DF_Weights_80 , 2 , summary)
+apply( DF_Weights_80 , 2 , mean)
+
+
+```
+All categories report extreme weights, with sample covariance and shrink_CC.T with 155 observations reporting more extreme negative weights. 
+Overall the sample covariance reports very extreme negatove and postive weights. 
+
+
+Descriptive Stats for Shrinkage intensity: $\hat{\alpha}^*$.
+```{r}
+
+# Table of shrinkage value summary. 
+# In each loop throughout the 40 portfolio creation period, the shrinkage values were printed out. 
+# Here we obtain their descriptive statistics
+Shrinkage_values <- data.frame(
+  Dates = as.Date(c(
+    "2013-09-27", "2013-12-27", "2014-03-28", "2014-06-27", "2014-09-26", 
+    "2014-12-26", "2015-03-27", "2015-06-26", "2015-09-25", "2015-12-25",
+    "2016-03-25", "2016-06-24", "2016-09-30", "2016-12-30", "2017-03-31", 
+    "2017-06-30", "2017-09-29", "2017-12-29", "2018-03-30", "2018-06-29", 
+    "2018-09-28", "2018-12-28", "2019-03-29", "2019-06-28", "2019-09-27", 
+    "2019-12-27", "2020-03-27", "2020-06-26", "2020-09-25", "2020-12-25", 
+    "2021-03-26", "2021-06-25", "2021-09-24", "2021-12-31", "2022-03-25", 
+    "2022-06-24", "2022-09-30", "2022-12-30", "2023-03-31", "2023-06-30"
+  )),
+  Shrinkage_values_260_SF = c(
+    0.3504226, 0.4184474, 0.3290072, 0.2611765, 0.2446572, 0.2446476, 
+    0.2262708, 0.2339399, 0.238409, 0.2513828, 0.2257271, 0.2199559, 
+    0.2111461, 0.2134439, 0.2235126, 0.2104668, 0.2147226, 0.2104642, 
+    0.1944861, 0.1956505, 0.2467105, 0.2586034, 0.2612317, 0.2582875, 
+    0.2402488, 0.2335704, 0.3078959, 0.3163728, 0.2660249, 0.2691167, 
+    0.2835368, 0.3005496, 0.2853893, 0.2751327, 0.2254278, 0.2150873, 
+    0.2339172, 0.2203174, 0.2107652, 0.2087443
+  ),
+  Shrinkage_values_260_CC = c(
+    0.4445751, 0.2834206, 0.2677668, 0.2605944, 0.256738, 0.2557889, 
+    0.25591, 0.2594348, 0.2588357, 0.2457914, 0.2515159, 0.2468747, 
+    0.2230371, 0.2103098, 0.2146393, 0.2014949, 0.1984099, 0.1926856, 
+    0.1835312, 0.1873904, 0.1853726, 0.185221, 0.1739512, 0.1642792, 
+    0.1540323, 0.1455771, 0.386147, 0.1473309, 0.3753597, 0.3581027, 
+    0.3848782, 0.4026824, 0.3134412, 0.32554, 0.2194035, 0.1984127, 
+    0.2877048, 0.2648796, 0.2532681, 0.2549465
+  ), 
+  Shrinkage_values_155_SF = c(
+    0.3068053, 0.3361554, 0.3542871, 0.36528, 0.4096819, 0.4127504, 
+    0.3790264, 0.3796779, 0.4008373, 0.3951493, 0.3021773, 0.2882233, 
+    0.2847948, 0.2785896, 0.2886891, 0.2637793, 0.2495882, 0.2460197, 
+    0.2433809, 0.2382669, 0.3063802, 0.3245535, 0.3679283, 0.3714226, 
+    0.3352397, 0.3174652, 0.4245257, 0.4812167, 0.3754929, 0.363639, 
+    0.3626905, 0.3623051, 0.3356883, 0.3231101, 0.2571275, 0.2231455, 
+    0.2675109, 0.2373096, 0.2102031, 0.2580337
+  ), 
+  Shrinkage_values_155_CC =  c(
+    0.3598359, 0.3664451, 0.3739431, 0.3735798, 0.3226397, 0.3162747,
+    0.3013645, 0.2962459, 0.3110489, 0.2976923, 0.2890371, 0.2994387,
+    0.2955618, 0.2707501, 0.2880979, 0.2710232, 0.2602906, 0.2529819,
+    0.2481647, 0.2676992, 0.2627659, 0.2783812, 0.2675594, 0.2626138,
+    0.2299063, 0.2311181, 0.8142859, 0.1910608, 0.5868392, 0.5228317,
+    0.5503342, 0.5371188, 0.3650669, 0.3672612, 0.2475802, 0.230912,
+    0.3491774, 0.3382479, 0.2474074, 0.3110585
+  ),
+  Shrinkage_values_80_SF  =  c(
+    0.5359711, 0.5844235, 0.5783352, 0.5912656, 0.5370289, 0.5205722, 
+    0.4772748, 0.4636239, 0.4746056, 0.4902806, 0.3840894, 0.3511575, 
+    0.3701514, 0.3441414, 0.3828274, 0.3093427, 0.3434175, 0.3253334, 
+    0.3213465, 0.3716704, 0.5039561, 0.5646968, 0.581781, 0.482528, 
+    0.4008903, 0.3761145, 0.4642826, 0.6082284, 0.4827416, 0.5286349, 
+    0.5199258, 0.5367665, 0.4464279, 0.3763993, 0.2750409, 0.3027453, 
+    0.3358082, 0.3354868, 0.3630373, 0.4209568
+   ),
+   Shrinkage_values_80_CC =  c(
+    0.3853144, 0.4197932, 0.4113178, 0.4280512, 0.4279287, 0.5113811, 
+    0.4928899, 0.4396556, 0.468962, 0.4248935, 0.4204743, 0.4152611, 
+    0.4381467, 0.3805624, 0.3964184, 0.3650228, 0.3555959, 0.3801677, 
+    0.3394628, 0.4397843, 0.5271369, 0.5391669, 0.4790016, 0.3738266, 
+    0.2719109, 0.2343546, 0.9038947, 0.1765207, 0.8472835, 0.9067376, 
+    1, 1, 0.2966014, 0.4529285, 0.4007445, 0.569671, 0.5573084, 0.5567706, 
+    0.3810768, 0.4096784
+   )
+)
+
+summary(Shrinkage_values)
+```
+
+
+
+
