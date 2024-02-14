@@ -23,7 +23,7 @@ library(readxl)
 ###...........................###
 ###...........................###
 ###
-file_pathA <- "/Users/gildastaliah/CAU_Kiel/MasterThesis/Data_IS.xlsx"
+file_pathA <- "/.../MasterThesis/Data_IS.xlsx"
 sheetsA <- excel_sheets(file_pathA)
 Data_IS <- lapply(sheetsA, function(sheet) {
   read_excel(file_pathA, sheet = sheet)
@@ -33,7 +33,7 @@ names(Data_IS) <- sheetsA
 
 
 ###
-file_pathB <- "/Users/gildastaliah/CAU_Kiel/MasterThesis/Data_OS.xlsx"
+file_pathB <- "/.../MasterThesis/Data_OS.xlsx"
 sheetsB <- excel_sheets(file_pathB)
 Data_OS <- lapply(sheetsB, function(sheet) {
   read_excel(file_pathB, sheet = sheet)
