@@ -8,14 +8,3 @@ This repository contains the code and data files for my master's thesis titled "
 - **MasterThesis_RCode.Rmd**: This R Markdown file contains the R code used for data analysis and generating results presented in the thesis.
 - **Data_IS and Data_OS**: This folder contains the Excel files used for analysis.
   
-## Usage
-To replicate the analysis or explore the code, follow these steps:
-1. Download this repository to your local machine.
-2. Open the `RCode.Rmd` file in RStudio or any compatible R environment.
-3. Ensure that the necessary R packages mentioned in the Rmd file are installed.
-4. Run the code chunks sequentially to reproduce the analysis and results.
-5. Feel free to modify the code or experiment with different datasets as needed.
-
-## Feedback and Contributions
-If you have any feedback, suggestions, or find any issues with the code or thesis, I'd be the happier one when you reach out.
-
